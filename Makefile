@@ -7,7 +7,7 @@ clean:
 	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
 
 install: all
-	sudo insmod spinlock-bench.ko
+	insmod spinlock-bench.ko
 
 uninstall:
-	sudo rmmod spinlock-bench
+	rmmod spinlock-bench
