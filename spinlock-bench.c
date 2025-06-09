@@ -4,7 +4,15 @@
 #include <linux/ktime.h>
 #include <linux/kthread.h>
 #include <linux/atomic.h>
+#include <linux/proc_fs.h>
+#include <linux/uaccess.h>
+#include <linux/mutex.h>
+#include <linux/string.h>
+#include <linux/seq_file.h>
 
+
+#define BUFSIZE 1024
+static char proc_data[BUFSIZE];
 
 // critical/non-critical section design comes from glibc benchtests:
 // https://github.com/bminor/glibc/blob/glibc-2.40/benchtests/bench-pthread-lock-base.c
@@ -178,23 +186,116 @@ static void bench(int nthreads, int crit_len, int non_crit_len)
 		}
 
 	long total_iters = iters * nthreads;
+	int remains = BUFSIZE;
+	char *pos = proc_data;
 	for (int i = 1; i < RUN_COUNT + 1; i++)
 	{
-		printk("%ld\t", total_iters*1000000000/ts[i]);
+		int written = snprintf(pos, remains, "%ld ",
+				total_iters*1000000000/ts[i]);
+		remains -= written;
+		pos += written;
+		if (remains <= 0)
+		{
+			printk("no enough buffer to write results\n");
+			break;
+		}
 	}
-	printk("\n");
+	if (remains)
+		snprintf(pos, remains, "\n");
 }
+
+DEFINE_MUTEX(bench_lock);
+
+#define PROC_FILENAME	"spinlock_bench"
+
+static int proc_show(struct seq_file *m, void *v)
+{
+	int ret = 0;
+	mutex_lock(&bench_lock);
+	int len = strnlen(proc_data, BUFSIZE);
+	if (len >= BUFSIZE)
+	{
+		ret = -EFAULT;
+		goto out;
+	}
+	seq_printf(m, "%s", proc_data);
+out:
+	mutex_unlock(&bench_lock);
+	return 0;
+}
+
+static int proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, proc_show, NULL);
+}
+
+static int parse_string_to_ints(const char *str, int *arr, int max_elements) {
+	char *token;
+	char *str_copy;
+	int i = 0;
+
+	// Make a copy of the input string
+	str_copy = kstrdup(str, GFP_KERNEL);
+	if (!str_copy)
+		return -ENOMEM;
+
+	// Split the string by spaces
+	while ((token = strsep(&str_copy, " ")) != NULL && i < max_elements) {
+		if (kstrtoint(token, 10, &arr[i]) == 0)
+			i++;
+		else
+			printk(KERN_WARNING "Failed to convert '%s' to int\n", token);
+	}
+
+	kfree(str_copy);
+	return i; // Return the number of parsed integers
+}
+
+#define NUM_ARGS	3
+
+static ssize_t proc_write(struct file *file, const char __user *ubuf, size_t count, loff_t *ppos) {
+	int args[3];
+
+	if (count > BUFSIZE)
+		return -EFAULT;
+	if (copy_from_user(proc_data, ubuf, count))
+		return -EFAULT;
+	proc_data[count] = '\0';
+
+	int parsed = parse_string_to_ints(proc_data, args, NUM_ARGS);
+	if (parsed != NUM_ARGS)
+		return -EFAULT;
+
+	// good, run the bench
+	mutex_lock(&bench_lock);
+	int nthreads = args[0];
+	int crit_len = args[1];
+	int non_crit_len = args[2];
+	bench(nthreads, crit_len, non_crit_len);
+	mutex_unlock(&bench_lock);
+	return count;
+}
+
+static struct proc_ops proc_fops = {
+	.proc_open = proc_open,
+	.proc_read = seq_read,
+	.proc_lseek = seq_lseek,
+	.proc_write = proc_write,
+};
+
 
 // Initialization function (called when the module is loaded)
 static int __init spinlock_bench_init(void)
 {
 	printk(KERN_INFO "spinlock bench loaded\n");
+	proc_create(PROC_FILENAME, 0666, NULL, &proc_fops);
 	return 0; // Return 0 means success
 }
 
 // Exit function (called when the module is removed)
 static void __exit spinlock_bench_exit(void)
 {
+	remove_proc_entry(PROC_FILENAME, NULL);
 	printk(KERN_INFO "spinlock bench unloaded\n");
 }
 
