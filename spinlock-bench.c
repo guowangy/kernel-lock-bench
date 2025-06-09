@@ -9,6 +9,7 @@
 #include <linux/mutex.h>
 #include <linux/string.h>
 #include <linux/seq_file.h>
+#include <linux/delay.h>
 
 
 #define BUFSIZE 1024
@@ -103,8 +104,9 @@ static int worker(void *v)
 
 static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters)
 {
-	struct task_struct *tasks[nthreads];
-	worker_params_t *p, params[nthreads];
+	struct task_struct *task;
+	worker_params_t *p;
+	worker_params_t *params = kmalloc(sizeof(worker_params_t) * nthreads, GFP_KERNEL);
 	atomic_t alives;	// number of alives threads
 	atomic_t start;		// should start bench
 
@@ -120,8 +122,8 @@ static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters
 		p->non_crit_len = non_crit_len;
 		p->alives = &alives;
 		p->start = &start;
-		tasks[i] = kthread_create(worker, (void *)p, "spinlock-bench");
-		wake_up_process(tasks[i]);
+		task = kthread_create(worker, (void *)p, "spinlock-bench");
+		wake_up_process(task);
 	}
 
 	// wait for all thread started
@@ -132,7 +134,7 @@ static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters
 
 	// wait for all thread exits
 	while (atomic_read(&alives))
-		cpu_relax();
+		msleep(100);
 
 	// teardown threads
 	long sum_ns = 0;
@@ -141,6 +143,7 @@ static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters
 		sum_ns += params[i].duration_ns;
 	}
 
+	kfree(params);
 	// return mean time for each thread
 	return sum_ns/nthreads;
 }
