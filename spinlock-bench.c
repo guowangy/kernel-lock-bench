@@ -67,8 +67,8 @@ typedef struct worker_params {
 	long iters;
 	int crit_len;
 	int non_crit_len;
+	int nthreads;
 	atomic_t *alives;
-	atomic_t *start;
 	long duration_ns;
 } worker_params_t;
 
@@ -79,9 +79,9 @@ static int worker(void *v)
 	worker_params_t *p = (worker_params_t *)v;
 	long iters = p->iters;
 
-	// spin wait for starting
 	atomic_inc(p->alives);
-	while (!atomic_read(p->start))
+	// spin wait for all thread spawned
+	while (atomic_read(p->alives) != p->nthreads)
 		cpu_relax();
 
 	ktime_t start_time = ktime_get();
@@ -108,10 +108,8 @@ static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters
 	worker_params_t *p;
 	worker_params_t *params = kmalloc(sizeof(worker_params_t) * nthreads, GFP_KERNEL);
 	atomic_t alives;	// number of alives threads
-	atomic_t start;		// should start bench
 
 	atomic_set(&alives, 0);
-	atomic_set(&start, 0);
 
 	// launch threads to bench
 	for (int i = 0; i < nthreads; i++)
@@ -120,21 +118,16 @@ static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters
 		p->iters = iters;
 		p->crit_len = crit_len;
 		p->non_crit_len = non_crit_len;
+		p->nthreads = nthreads;
 		p->alives = &alives;
-		p->start = &start;
 		task = kthread_create(worker, (void *)p, "spinlock-bench");
 		wake_up_process(task);
 	}
 
-	// wait for all thread started
-	while (atomic_read(&alives) != nthreads)
-		cpu_relax();
-
-	atomic_set(&start, 1);  // start bench
-
 	// wait for all thread exits
-	while (atomic_read(&alives))
-		msleep(100);
+	do
+		msleep(10);
+	while (atomic_read(&alives));
 
 	// teardown threads
 	long sum_ns = 0;
@@ -155,7 +148,7 @@ static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters
 
 static void bench(int nthreads, int crit_len, int non_crit_len)
 {
-	long iters = START_ITERS;
+	long iters = START_ITERS/nthreads;
 	long cur;
 	long ts[RUN_COUNT + 2];
 
