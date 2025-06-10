@@ -69,22 +69,44 @@ typedef struct worker_params {
 	int non_crit_len;
 	int nthreads;
 	atomic_t *alives;
+	atomic_t *timeout;
 	long duration_ns;
 } worker_params_t;
 
 DEFINE_SPINLOCK(my_spinlock);
 
+#define SPAWN_TIMEOUT_NS	500000000	// 0.5s
 static int worker(void *v)
 {
 	worker_params_t *p = (worker_params_t *)v;
 	long iters = p->iters;
+	ktime_t start_time = ktime_get();
+	int i = 0;
 
 	atomic_inc(p->alives);
 	// spin wait for all thread spawned
-	while (atomic_read(p->alives) != p->nthreads)
+	while (atomic_read(p->alives) != p->nthreads &&
+			!atomic_read(p->timeout))
+	{
+		i++;
+		if (i == 10000)
+		{
+			long wait_ns = ktime_to_ns(
+					ktime_sub(ktime_get(), start_time));
+			if (wait_ns > SPAWN_TIMEOUT_NS)
+			{
+				atomic_set(p->timeout, 1);
+				break;
+			}
+			i = 0;
+		}
 		cpu_relax();
+	}
 
-	ktime_t start_time = ktime_get();
+	if (atomic_read(p->timeout))
+		goto out;
+
+	start_time = ktime_get();
 	while (iters--)
 	{
 		unsigned long flags;
@@ -98,6 +120,7 @@ static int worker(void *v)
 	ktime_t end_time = ktime_get();
 	p->duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
 
+out:
 	atomic_dec(p->alives);
 	return 0;
 }
@@ -108,8 +131,12 @@ static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters
 	worker_params_t *p;
 	worker_params_t *params = kmalloc(sizeof(worker_params_t) * nthreads, GFP_KERNEL);
 	atomic_t alives;	// number of alives threads
+	atomic_t timeout;	// number of alives threads
+	int retry = 0;
 
+retry:
 	atomic_set(&alives, 0);
+	atomic_set(&timeout, 0);
 
 	// launch threads to bench
 	for (int i = 0; i < nthreads; i++)
@@ -120,6 +147,7 @@ static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters
 		p->non_crit_len = non_crit_len;
 		p->nthreads = nthreads;
 		p->alives = &alives;
+		p->timeout = &timeout;
 		task = kthread_create(worker, (void *)p, "spinlock-bench");
 		wake_up_process(task);
 	}
@@ -128,6 +156,19 @@ static long do_one_test(int nthreads, int crit_len, int non_crit_len, long iters
 	do
 		msleep(10);
 	while (atomic_read(&alives));
+
+	if (atomic_read(&timeout))
+	{
+		if (retry < 10)
+		{
+			retry++;
+			printk("spawn threads to run, timeout, retry - %d.\n", retry);
+			goto retry;
+		} else {
+			printk("spawn threads fails after retries. abort.\n");
+			return 0;
+		}
+	}
 
 	// teardown threads
 	long sum_ns = 0;
@@ -186,6 +227,8 @@ static void bench(int nthreads, int crit_len, int non_crit_len)
 	char *pos = proc_data;
 	for (int i = 1; i < RUN_COUNT + 1; i++)
 	{
+		if (!ts[i])
+			continue;
 		int written = snprintf(pos, remains, "%ld ",
 				total_iters*1000000000/ts[i]);
 		remains -= written;
