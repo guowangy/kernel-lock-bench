@@ -20,6 +20,7 @@ Run the test
 ```bash
 echo "[nthreads] [crit_len] [non_crit_len] > /proc/spinlock_bench
 
+# nthreads should <= num_online_cpus()
 # example: echo "16 2 8" > /proc/spinlock_bench
 ```
 

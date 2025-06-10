@@ -10,6 +10,7 @@
 #include <linux/string.h>
 #include <linux/seq_file.h>
 #include <linux/delay.h>
+#include <linux/smp.h>
 
 
 #define BUFSIZE 1024
@@ -305,11 +306,15 @@ static ssize_t proc_write(struct file *file, const char __user *ubuf, size_t cou
 	if (parsed != NUM_ARGS)
 		return -EFAULT;
 
-	// good, run the bench
-	mutex_lock(&bench_lock);
 	int nthreads = args[0];
 	int crit_len = args[1];
 	int non_crit_len = args[2];
+
+	if (nthreads > num_online_cpus())
+		return -EFAULT;
+
+	// good, run the bench
+	mutex_lock(&bench_lock);
 	bench(nthreads, crit_len, non_crit_len);
 	mutex_unlock(&bench_lock);
 	return count;
