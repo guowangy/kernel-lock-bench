@@ -33,7 +33,7 @@ static void
 do_filler(void)
 {
 	char buf1[512], buf2[512];
-	int f = fibonacci(4);
+	int f = fibonacci(2);
 	memcpy(buf1, buf2, f);
 }
 
@@ -41,7 +41,7 @@ static void
 do_filler_shared(void)
 {
 	static char buf1[512], buf2[512];
-	int f = fibonacci(4);
+	int f = fibonacci(2);
 	memcpy(buf1, buf2, f);
 }
 
