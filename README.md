@@ -7,6 +7,7 @@ The bench configuration consists of 3 parts:
 2. critical-section length
 3. non-critical-section length
 
+The `length` is the number of unit work, each unit work will roughly take 15 cycles in Icelake.
 
 ### Usage
 
